@@ -1,0 +1,901 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>DriveGuard — Assistente di Guida</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/tensorflow/4.10.0/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap');
+:root{
+  --bg:#050a0e;--panel:#0b1520;--border:#1a3a5c;
+  --amber:#ffaa00;--amber-dim:#7a5000;
+  --red:#ff2d2d;--green:#00ff88;--cyan:#00c8ff;
+  --text:#c8dde8;--text-dim:#4a6a7a;
+  --scan:rgba(0,200,255,0.03);
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{width:100%;height:100%;background:var(--bg);color:var(--text);font-family:'Rajdhani',sans-serif;overflow:hidden;-webkit-tap-highlight-color:transparent;}
+body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,var(--scan) 2px,var(--scan) 4px);pointer-events:none;z-index:9999;}
+
+/* ── SCREENS ── */
+.screen{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity .4s ease;}
+.screen.hidden{opacity:0;pointer-events:none;}
+
+/* ── HOME ── */
+#home{background:radial-gradient(ellipse at 50% 30%,#0d2033 0%,#050a0e 70%);padding:1.5rem;}
+.logo-wrap{text-align:center;margin-bottom:2rem;}
+.logo-icon{width:64px;height:64px;margin:0 auto .8rem;}
+.logo-icon svg{width:100%;height:100%;}
+.logo-title{font-size:2.6rem;font-weight:700;letter-spacing:.15em;text-transform:uppercase;color:var(--cyan);text-shadow:0 0 30px rgba(0,200,255,.5);line-height:1;}
+.logo-sub{font-family:'Share Tech Mono',monospace;font-size:.65rem;letter-spacing:.3em;color:var(--text-dim);margin-top:.3rem;text-transform:uppercase;}
+.divider{width:100%;max-width:380px;height:1px;background:linear-gradient(90deg,transparent,var(--border),transparent);margin:0 auto 1.8rem;}
+.mode-label{font-family:'Share Tech Mono',monospace;font-size:.6rem;letter-spacing:.4em;color:var(--text-dim);text-transform:uppercase;margin-bottom:.9rem;text-align:center;}
+.mode-cards{width:100%;max-width:390px;display:flex;flex-direction:column;gap:.8rem;}
+.mode-card{background:var(--panel);border:1px solid var(--border);border-radius:4px;padding:1.1rem 1.4rem;cursor:pointer;position:relative;overflow:hidden;transition:border-color .2s,transform .15s;display:flex;align-items:center;gap:1.1rem;}
+.mode-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;}
+.mode-card.pedestrian::before{background:var(--amber);}
+.mode-card.lane::before{background:var(--cyan);}
+.mode-card.safety::before{background:var(--green);}
+.mode-card:active{transform:scale(.98);}
+.card-icon{width:44px;height:44px;flex-shrink:0;}
+.card-icon svg{width:100%;height:100%;}
+.card-body{flex:1;}
+.card-title{font-size:1.05rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;line-height:1.2;}
+.mode-card.pedestrian .card-title{color:var(--amber);}
+.mode-card.lane .card-title{color:var(--cyan);}
+.mode-card.safety .card-title{color:var(--green);}
+.card-desc{font-size:.75rem;color:var(--text-dim);margin-top:.25rem;line-height:1.35;font-family:'Share Tech Mono',monospace;}
+.card-arrow{color:var(--text-dim);font-size:1.3rem;flex-shrink:0;}
+
+/* ── ACTIVE ── */
+#active{background:#000;justify-content:flex-start;padding:0;}
+#videoEl{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;}
+#overlayCanvas{position:absolute;inset:0;width:100%;height:100%;z-index:1;pointer-events:none;}
+#debugCanvas{position:absolute;top:62px;left:0;width:160px;height:90px;z-index:5;pointer-events:none;opacity:0;border:1px solid var(--border);transition:opacity .3s;}
+.hud-top{position:absolute;top:0;left:0;right:0;z-index:10;display:flex;align-items:center;justify-content:space-between;padding:.8rem 1rem;background:linear-gradient(to bottom,rgba(5,10,14,.9) 0%,transparent 100%);}
+.hud-back{background:rgba(11,21,32,.8);border:1px solid var(--border);color:var(--text);font-family:'Rajdhani',sans-serif;font-size:.85rem;font-weight:600;letter-spacing:.1em;text-transform:uppercase;padding:.4rem .9rem;border-radius:3px;cursor:pointer;}
+.hud-mode-badge{font-family:'Share Tech Mono',monospace;font-size:.6rem;letter-spacing:.15em;text-transform:uppercase;padding:.3rem .7rem;border-radius:2px;}
+.hud-mode-badge.lane{background:rgba(0,200,255,.1);border:1px solid rgba(0,200,255,.3);color:var(--cyan);}
+.hud-mode-badge.pedestrian{background:rgba(255,170,0,.15);border:1px solid var(--amber-dim);color:var(--amber);}
+.hud-mode-badge.safety{background:rgba(0,255,136,.08);border:1px solid rgba(0,255,136,.3);color:var(--green);}
+.hud-status{font-family:'Share Tech Mono',monospace;font-size:.6rem;letter-spacing:.15em;color:var(--green);display:flex;align-items:center;gap:.4rem;}
+.status-dot{width:6px;height:6px;border-radius:50%;background:var(--green);animation:pulse-dot 1.5s ease-in-out infinite;}
+@keyframes pulse-dot{0%,100%{opacity:1;}50%{opacity:.3;}}
+.hud-bottom{position:absolute;bottom:0;left:0;right:0;z-index:10;background:linear-gradient(to top,rgba(5,10,14,.95) 0%,transparent 100%);padding:.8rem 1.2rem 1.8rem;display:flex;flex-direction:column;align-items:center;gap:.5rem;}
+.alert-banner{width:100%;padding:.65rem 1rem;border-radius:3px;text-align:center;font-size:.95rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;transition:all .2s;opacity:0;transform:translateY(8px);}
+.alert-banner.visible{opacity:1;transform:translateY(0);}
+.alert-banner.danger{background:rgba(255,45,45,.2);border:1px solid var(--red);color:var(--red);animation:flash-alert .5s ease-in-out infinite;box-shadow:0 0 20px rgba(255,45,45,.3);}
+.alert-banner.warning{background:rgba(255,170,0,.15);border:1px solid var(--amber);color:var(--amber);}
+@keyframes flash-alert{0%,100%{opacity:1;}50%{opacity:.6;}}
+
+/* dev bar */
+.dev-bar-wrap{width:220px;height:18px;position:relative;background:rgba(11,21,32,.8);border:1px solid var(--border);border-radius:2px;overflow:visible;}
+.dev-bar-center{position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--text-dim);}
+.dev-bar-fill{position:absolute;top:2px;bottom:2px;width:10px;border-radius:2px;transition:left .15s,background .3s;}
+.dev-bar-label{font-family:'Share Tech Mono',monospace;font-size:.55rem;color:var(--text-dim);letter-spacing:.1em;text-align:center;}
+
+/* safety panel */
+.safety-panel{width:100%;background:rgba(11,21,32,.7);border:1px solid var(--border);border-radius:3px;padding:.5rem .8rem;}
+.safety-row{display:flex;justify-content:space-around;align-items:center;}
+.s-metric{display:flex;flex-direction:column;align-items:center;gap:1px;font-family:'Share Tech Mono',monospace;font-size:.55rem;color:var(--text-dim);letter-spacing:.08em;text-transform:uppercase;}
+.s-val{font-size:1.35rem;font-weight:700;color:var(--green);font-family:'Rajdhani',sans-serif;letter-spacing:.05em;transition:color .3s;}
+.s-val.warn{color:var(--amber);}
+.s-val.danger{color:var(--red);}
+.s-sep{width:1px;height:36px;background:var(--border);}
+
+/* metrics row */
+.metrics-row{display:flex;gap:1.5rem;align-items:center;font-family:'Share Tech Mono',monospace;font-size:.65rem;color:var(--text-dim);letter-spacing:.1em;}
+.metric{display:flex;flex-direction:column;align-items:center;gap:2px;}
+.metric-val{font-size:1.1rem;color:var(--text);font-weight:600;}
+.metric-val.ok{color:var(--green);}
+.metric-val.warn{color:var(--amber);}
+.metric-val.danger{color:var(--red);}
+.hud-frame{position:absolute;inset:60px 16px 160px;z-index:2;pointer-events:none;}
+.corner{position:absolute;width:24px;height:24px;border-color:rgba(0,200,255,.4);border-style:solid;}
+.corner.tl{top:0;left:0;border-width:2px 0 0 2px;}
+.corner.tr{top:0;right:0;border-width:2px 2px 0 0;}
+.corner.bl{bottom:0;left:0;border-width:0 0 2px 2px;}
+.corner.br{bottom:0;right:0;border-width:0 2px 2px 0;}
+.corner.pedestrian{border-color:rgba(255,170,0,.5);}
+.corner.safety-c{border-color:rgba(0,255,136,.4);}
+.debug-btn{position:absolute;top:65px;left:4px;z-index:20;background:rgba(11,21,32,.7);border:1px solid var(--border);color:var(--text-dim);font-family:'Share Tech Mono',monospace;font-size:.5rem;letter-spacing:.1em;padding:.2rem .4rem;border-radius:2px;cursor:pointer;}
+
+/* ── LOADING ── */
+#loading{background:var(--bg);gap:1.5rem;z-index:100;}
+.loading-spinner{width:56px;height:56px;border:2px solid var(--border);border-top-color:var(--cyan);border-radius:50%;animation:spin .8s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg);}}
+.loading-text{font-family:'Share Tech Mono',monospace;font-size:.75rem;letter-spacing:.3em;color:var(--text-dim);text-transform:uppercase;text-align:center;max-width:280px;}
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════ HOME ══ -->
+<div class="screen" id="home">
+  <div class="logo-wrap">
+    <div class="logo-icon">
+      <svg viewBox="0 0 72 72" fill="none">
+        <circle cx="36" cy="36" r="34" stroke="#00c8ff" stroke-width="1.5" opacity=".3"/>
+        <path d="M12 48 L36 18 L60 48 L50 48 L36 26 L22 48Z" fill="#00c8ff" opacity=".9"/>
+        <circle cx="36" cy="40" r="4" fill="#00c8ff"/>
+        <path d="M8 56 L64 56" stroke="#ffaa00" stroke-width="1.5" stroke-dasharray="4 3"/>
+      </svg>
+    </div>
+    <div class="logo-title">DriveGuard</div>
+    <div class="logo-sub">Sistema Assistenza Guida v3.0</div>
+  </div>
+  <div class="divider"></div>
+  <div class="mode-label">▸ Seleziona modalità operativa</div>
+  <div class="mode-cards">
+
+    <!-- PEDONI (invariato) -->
+    <div class="mode-card pedestrian" onclick="startMode('pedestrian')">
+      <div class="card-icon">
+        <svg viewBox="0 0 48 48" fill="none">
+          <circle cx="24" cy="10" r="5" stroke="#ffaa00" stroke-width="2"/>
+          <path d="M17 20 Q24 15 31 20 L34 32 L28 32 L26 42 L22 42 L20 32 L14 32Z" stroke="#ffaa00" stroke-width="2" fill="rgba(255,170,0,0.1)"/>
+          <path d="M14 32 L10 40 M34 32 L38 40" stroke="#ffaa00" stroke-width="2" stroke-linecap="round"/>
+          <path d="M4 44 L44 44" stroke="#ffaa00" stroke-width="1.5" stroke-dasharray="3 2"/>
+        </svg>
+      </div>
+      <div class="card-body">
+        <div class="card-title">Rilevamento Pedoni</div>
+        <div class="card-desc">Identifica pedoni sulla carreggiata e avvisa con segnale acustico</div>
+      </div>
+      <div class="card-arrow">›</div>
+    </div>
+
+    <!-- CORSIA -->
+    <div class="mode-card lane" onclick="startMode('lane')">
+      <div class="card-icon">
+        <svg viewBox="0 0 48 48" fill="none">
+          <path d="M4 44 L20 10" stroke="#00c8ff" stroke-width="2.5" stroke-linecap="round"/>
+          <path d="M44 44 L28 10" stroke="#00c8ff" stroke-width="2.5" stroke-linecap="round"/>
+          <path d="M24 38 L24 32 M24 27 L24 21 M24 16 L24 12" stroke="#00c8ff" stroke-width="1.5" stroke-linecap="round" opacity=".5"/>
+          <rect x="18" y="30" width="12" height="7" rx="1" stroke="#00ff88" stroke-width="1.5" fill="rgba(0,255,136,0.1)"/>
+        </svg>
+      </div>
+      <div class="card-body">
+        <div class="card-title">Mantenimento Corsia</div>
+        <div class="card-desc">Rileva strisce continue e discontinue, avvisa se si esce dalla corsia</div>
+      </div>
+      <div class="card-arrow">›</div>
+    </div>
+
+    <!-- DISTANZA DI SICUREZZA -->
+    <div class="mode-card safety" onclick="startMode('safety')">
+      <div class="card-icon">
+        <svg viewBox="0 0 48 48" fill="none">
+          <rect x="14" y="6" width="20" height="11" rx="2" stroke="#00ff88" stroke-width="1.8" fill="rgba(0,255,136,0.08)"/>
+          <rect x="11" y="30" width="26" height="13" rx="2" stroke="#00ff88" stroke-width="1.8" fill="rgba(0,255,136,0.08)"/>
+          <path d="M24 19 L24 28" stroke="#ffaa00" stroke-width="1.2" stroke-dasharray="2 1.5"/>
+          <circle cx="38" cy="10" r="6" stroke="#ffaa00" stroke-width="1.4" fill="none"/>
+          <path d="M38 7.5 L38 10 L40 12" stroke="#ffaa00" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M8 36 L6 40 M40 36 L42 40" stroke="#00ff88" stroke-width="1.2" stroke-linecap="round" opacity=".6"/>
+          <path d="M14 30 L11 34 M34 30 L37 34" stroke="#00ff88" stroke-width="1.2" stroke-linecap="round" opacity=".6"/>
+        </svg>
+      </div>
+      <div class="card-body">
+        <div class="card-title">Distanza di Sicurezza</div>
+        <div class="card-desc">GPS + AI: calcola distanza minima e avvisa se troppo vicini al veicolo davanti</div>
+      </div>
+      <div class="card-arrow">›</div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ══════════════════════════════════ LOADING ══ -->
+<div class="screen hidden" id="loading">
+  <div class="loading-spinner"></div>
+  <div class="loading-text" id="loadingMsg">Inizializzazione sistema...</div>
+</div>
+
+<!-- ═══════════════════════════════════ ACTIVE ══ -->
+<div class="screen hidden" id="active">
+  <video id="videoEl" autoplay muted playsinline></video>
+  <canvas id="overlayCanvas"></canvas>
+  <canvas id="debugCanvas"></canvas>
+
+  <div class="hud-frame">
+    <div class="corner tl" id="cTL"></div><div class="corner tr" id="cTR"></div>
+    <div class="corner bl" id="cBL"></div><div class="corner br" id="cBR"></div>
+  </div>
+
+  <div class="hud-top">
+    <button class="hud-back" onclick="goHome()">← ESCI</button>
+    <div class="hud-mode-badge" id="modeBadge"></div>
+    <div class="hud-status"><div class="status-dot"></div><span>LIVE</span></div>
+  </div>
+
+  <div class="hud-bottom">
+    <div class="alert-banner" id="alertBanner"></div>
+
+    <!-- Lane deviation bar -->
+    <div class="dev-bar-wrap" id="devBarWrap" style="display:none">
+      <div class="dev-bar-center"></div>
+      <div class="dev-bar-fill" id="devFill"></div>
+    </div>
+    <div class="dev-bar-label" id="devLabel" style="display:none">POSIZIONE IN CORSIA</div>
+
+    <!-- Safety distance panel -->
+    <div class="safety-panel" id="safetyPanel" style="display:none">
+      <div class="safety-row">
+        <div class="s-metric">
+          <span class="s-val" id="sSpeed">—</span>
+          <span>KM/H GPS</span>
+        </div>
+        <div class="s-sep"></div>
+        <div class="s-metric">
+          <span class="s-val" id="sSafeDist">—</span>
+          <span>DIST MIN (m)</span>
+        </div>
+        <div class="s-sep"></div>
+        <div class="s-metric">
+          <span class="s-val" id="sVehDist">—</span>
+          <span>VEICOLO (m)</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="metrics-row">
+      <div class="metric"><span class="metric-val ok" id="mState">OK</span><span>STATO</span></div>
+      <div class="metric"><span class="metric-val" id="mCount">—</span><span id="mLabel">RILEV.</span></div>
+      <div class="metric"><span class="metric-val" id="mFPS">--</span><span>FPS</span></div>
+    </div>
+  </div>
+
+  <button class="debug-btn" id="dbgBtn" onclick="toggleDebug()" style="display:none">DBG</button>
+</div>
+
+<script>
+// ════════════════════════════════════════════════════════
+//  GLOBALS
+// ════════════════════════════════════════════════════════
+let mode=null, stream=null, cocoModel=null, raf=null, audioCtx=null;
+let debugOn=false, fCount=0, fpsTimer=performance.now();
+let gpsWatchId=null, currentSpeedKmh=0;
+
+// Per-type beep cooldowns
+const lastBeeps={ped:0,lane:0,safety:0};
+
+const video    = document.getElementById('videoEl');
+const oc       = document.getElementById('overlayCanvas');
+const octx     = oc.getContext('2d');
+const dc       = document.getElementById('debugCanvas');
+const dctx     = dc.getContext('2d',{willReadFrequently:true});
+
+// Small canvas for pixel analysis
+const SAMPLE_W=320, SAMPLE_H=180;
+const sc=document.createElement('canvas'); sc.width=SAMPLE_W; sc.height=SAMPLE_H;
+const sctx=sc.getContext('2d',{willReadFrequently:true});
+
+// Lane temporal smoothing
+const HIST=15;
+let lhist={L:[],R:[]};
+
+// ════════════════════════════════════════════════════════
+//  AUDIO
+// ════════════════════════════════════════════════════════
+function getAC(){if(!audioCtx)audioCtx=new(window.AudioContext||window.webkitAudioContext)();return audioCtx;}
+
+function beep(type){
+  const cooldowns={ped:2500,lane:1600,safety:2200};
+  const now=Date.now();
+  if(now-lastBeeps[type]<(cooldowns[type]||1600))return;
+  lastBeeps[type]=now;
+  const a=getAC();
+
+  if(type==='ped'){
+    // Double sharp beep (unchanged)
+    [0,230].forEach(d=>{
+      const o=a.createOscillator(),g=a.createGain();
+      o.connect(g);g.connect(a.destination);
+      o.type='square';o.frequency.value=1100;
+      g.gain.setValueAtTime(0,a.currentTime+d/1e3);
+      g.gain.linearRampToValueAtTime(.3,a.currentTime+d/1e3+.015);
+      g.gain.linearRampToValueAtTime(0,a.currentTime+d/1e3+.18);
+      o.start(a.currentTime+d/1e3);o.stop(a.currentTime+d/1e3+.2);
+    });
+  } else if(type==='lane'){
+    // Sweeping sine (unchanged)
+    const o=a.createOscillator(),g=a.createGain();
+    o.connect(g);g.connect(a.destination);
+    o.type='sine';
+    o.frequency.setValueAtTime(600,a.currentTime);
+    o.frequency.linearRampToValueAtTime(980,a.currentTime+.22);
+    o.frequency.setValueAtTime(980,a.currentTime+.22);
+    o.frequency.linearRampToValueAtTime(600,a.currentTime+.44);
+    g.gain.setValueAtTime(0,a.currentTime);
+    g.gain.linearRampToValueAtTime(.35,a.currentTime+.04);
+    g.gain.linearRampToValueAtTime(0,a.currentTime+.48);
+    o.start(a.currentTime);o.stop(a.currentTime+.5);
+  } else if(type==='safety'){
+    // Triple descending beep — distinct from lane/ped
+    [0,160,320].forEach((d,i)=>{
+      const freq=950-(i*180);
+      const o=a.createOscillator(),g=a.createGain();
+      o.connect(g);g.connect(a.destination);
+      o.type='triangle';o.frequency.value=freq;
+      g.gain.setValueAtTime(0,a.currentTime+d/1e3);
+      g.gain.linearRampToValueAtTime(.38,a.currentTime+d/1e3+.02);
+      g.gain.linearRampToValueAtTime(0,a.currentTime+d/1e3+.13);
+      o.start(a.currentTime+d/1e3);o.stop(a.currentTime+d/1e3+.15);
+    });
+  }
+}
+
+// ════════════════════════════════════════════════════════
+//  UI HELPERS
+// ════════════════════════════════════════════════════════
+function showScreen(id){['home','loading','active'].forEach(s=>document.getElementById(s).classList.toggle('hidden',s!==id));}
+function setAlert(text,level){
+  const b=document.getElementById('alertBanner'),s=document.getElementById('mState');
+  if(text){b.textContent=text;b.className='alert-banner visible '+level;s.textContent=level==='danger'?'PERICOLO':'ATTN';s.className='metric-val '+level;}
+  else{b.className='alert-banner';s.textContent='OK';s.className='metric-val ok';}
+}
+function toggleDebug(){debugOn=!debugOn;dc.style.opacity=debugOn?'1':'0';}
+function updateFPS(){
+  fCount++;
+  const n=performance.now();
+  if(n-fpsTimer>=1000){document.getElementById('mFPS').textContent=fCount;fCount=0;fpsTimer=n;}
+}
+function resize(){
+  const w=video.videoWidth||window.innerWidth,h=video.videoHeight||window.innerHeight;
+  oc.width=w;oc.height=h;oc.style.width='100%';oc.style.height='100%';
+}
+
+// ════════════════════════════════════════════════════════
+//  GPS
+// ════════════════════════════════════════════════════════
+function startGPS(){
+  if(!navigator.geolocation)return;
+  gpsWatchId=navigator.geolocation.watchPosition(
+    pos=>{ currentSpeedKmh = pos.coords.speed!=null ? Math.max(0,pos.coords.speed*3.6) : 0; },
+    ()=>{ currentSpeedKmh=0; },
+    {enableHighAccuracy:true,maximumAge:1000,timeout:5000}
+  );
+}
+function stopGPS(){
+  if(gpsWatchId!=null){navigator.geolocation.clearWatch(gpsWatchId);gpsWatchId=null;}
+  currentSpeedKmh=0;
+}
+
+// ════════════════════════════════════════════════════════
+//  START / STOP
+// ════════════════════════════════════════════════════════
+async function startMode(m){
+  mode=m; showScreen('loading');
+  try{
+    document.getElementById('loadingMsg').textContent='Accesso fotocamera...';
+    stream=await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:'environment',width:{ideal:1280},height:{ideal:720}},audio:false
+    });
+    video.srcObject=stream;
+    await new Promise(r=>video.onloadedmetadata=r);
+    await video.play();
+    resize(); window.addEventListener('resize',resize);
+
+    if(m==='pedestrian'||m==='safety'){
+      document.getElementById('loadingMsg').textContent='Caricamento modello AI...';
+      if(!cocoModel) cocoModel=await cocoSsd.load({base:'mobilenet_v2'});
+    }
+    if(m==='safety'){
+      document.getElementById('loadingMsg').textContent='Acquisizione GPS...';
+      startGPS();
+    }
+
+    // Reset HUD
+    const badge=document.getElementById('modeBadge');
+    ['cTL','cTR','cBL','cBR'].forEach(c=>{
+      const el=document.getElementById(c);
+      el.classList.remove('pedestrian','safety-c');
+    });
+    document.getElementById('devBarWrap').style.display='none';
+    document.getElementById('devLabel').style.display='none';
+    document.getElementById('safetyPanel').style.display='none';
+    document.getElementById('dbgBtn').style.display='none';
+
+    if(m==='pedestrian'){
+      badge.textContent='● RILEVAMENTO PEDONI'; badge.className='hud-mode-badge pedestrian';
+      ['cTL','cTR','cBL','cBR'].forEach(c=>document.getElementById(c).classList.add('pedestrian'));
+      document.getElementById('mLabel').textContent='PERSONE';
+    } else if(m==='lane'){
+      badge.textContent='● MANTENIMENTO CORSIA'; badge.className='hud-mode-badge lane';
+      document.getElementById('mLabel').textContent='DEVIAZIONE';
+      document.getElementById('devBarWrap').style.display='block';
+      document.getElementById('devLabel').style.display='block';
+      document.getElementById('dbgBtn').style.display='block';
+      lhist={L:[],R:[]};
+    } else if(m==='safety'){
+      badge.textContent='● DISTANZA SICUREZZA'; badge.className='hud-mode-badge safety';
+      ['cTL','cTR','cBL','cBR'].forEach(c=>document.getElementById(c).classList.add('safety-c'));
+      document.getElementById('mLabel').textContent='VEICOLI';
+      document.getElementById('safetyPanel').style.display='block';
+    }
+
+    showScreen('active');
+    if(m==='pedestrian') pedLoop();
+    else if(m==='lane') laneLoop();
+    else safetyLoop();
+  } catch(e){
+    document.getElementById('loadingMsg').textContent='Errore: '+e.message;
+    setTimeout(goHome,3000);
+  }
+}
+
+function goHome(){
+  cancelAnimationFrame(raf); raf=null;
+  stopGPS();
+  if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}
+  octx.clearRect(0,0,oc.width,oc.height);
+  setAlert(null,null);
+  window.removeEventListener('resize',resize);
+  showScreen('home');
+}
+
+// ════════════════════════════════════════════════════════
+//  ██████████  PEDESTRIAN LOOP — INVARIATO  ██████████
+// ════════════════════════════════════════════════════════
+async function pedLoop(){
+  if(mode!=='pedestrian')return;
+  const preds=await cocoModel.detect(video);
+  octx.clearRect(0,0,oc.width,oc.height);
+  const zoneTop=oc.height*.15;
+  // zone hint
+  octx.strokeStyle='rgba(0,200,255,.12)';octx.setLineDash([6,4]);octx.lineWidth=1;
+  octx.strokeRect(20,zoneTop,oc.width-40,oc.height-zoneTop-20);octx.setLineDash([]);
+
+  let found=false,cnt=0;
+  for(const p of preds){
+    if(p.class!=='person')continue;
+    const[x,y,w,h]=p.bbox;
+    if(y+h<zoneTop)continue;
+    cnt++;
+    const hi=p.score>.55; if(hi)found=true;
+    const col=hi?'#ff2d2d':'#ffaa00';
+    octx.strokeStyle=col;octx.lineWidth=2;octx.strokeRect(x,y,w,h);
+    octx.fillStyle=hi?'rgba(255,45,45,.1)':'rgba(255,170,0,.08)';octx.fillRect(x,y,w,h);
+    const lbl=`PEDONE ${Math.round(p.score*100)}%`;
+    octx.font='bold 13px Rajdhani';octx.fillStyle=col;
+    const tw=octx.measureText(lbl).width;
+    octx.fillRect(x,y-20,tw+8,20);octx.fillStyle='#000';octx.fillText(lbl,x+4,y-5);
+    const cx=x+w/2,cy=y+h/2;
+    octx.strokeStyle=col;octx.lineWidth=1.5;
+    octx.beginPath();octx.moveTo(cx-12,cy);octx.lineTo(cx+12,cy);octx.moveTo(cx,cy-12);octx.lineTo(cx,cy+12);octx.stroke();
+  }
+  if(found){setAlert('⚠ PEDONE RILEVATO — RALLENTARE','danger');beep('ped');}
+  else if(cnt>0)setAlert('◉ PRESENZA PERSONE VICINE','warning');
+  else setAlert(null,null);
+  document.getElementById('mCount').textContent=cnt;
+  updateFPS();
+  raf=requestAnimationFrame(pedLoop);
+}
+
+// ════════════════════════════════════════════════════════
+//  ██████████  LANE DETECTION — V3 IMPROVED  ██████████
+// ════════════════════════════════════════════════════════
+function laneLoop(){
+  if(mode!=='lane')return;
+  detectLanes();
+  updateFPS();
+  raf=requestAnimationFrame(laneLoop);
+}
+
+function detectLanes(){
+  const W=oc.width, H=oc.height;
+  octx.clearRect(0,0,W,H);
+
+  // ── 1. Sample frame ──────────────────────────────────
+  sctx.drawImage(video,0,0,SAMPLE_W,SAMPLE_H);
+  const id=sctx.getImageData(0,0,SAMPLE_W,SAMPLE_H);
+  const px=id.data;
+
+  // ── 2. Adaptive brightness threshold ────────────────
+  // Sample the road area (bottom 35% of sample, center strip)
+  // to compute the median road brightness and adapt to lighting.
+  const roadYStart=Math.floor(SAMPLE_H*0.65);
+  const roadXStart=Math.floor(SAMPLE_W*0.25);
+  const roadXEnd  =Math.floor(SAMPLE_W*0.75);
+  let sumLum=0, cntLum=0;
+  for(let y=roadYStart;y<SAMPLE_H;y++){
+    for(let x=roadXStart;x<roadXEnd;x++){
+      const i=(y*SAMPLE_W+x)*4;
+      sumLum+=.299*px[i]+.587*px[i+1]+.114*px[i+2];
+      cntLum++;
+    }
+  }
+  const avgRoad=cntLum>0?sumLum/cntLum:120;
+  // White threshold: road average + offset, never below 140 or above 235
+  const whiteThr=Math.max(140,Math.min(235,avgRoad+55));
+
+  // ── 3. Build white/yellow stripe mask ───────────────
+  const mask=new Uint8Array(SAMPLE_W*SAMPLE_H);
+  for(let i=0,n=SAMPLE_W*SAMPLE_H;i<n;i++){
+    const r=px[i*4],g=px[i*4+1],b=px[i*4+2];
+    const lum=.299*r+.587*g+.114*b;
+    const sat=Math.max(r,g,b)-Math.min(r,g,b);
+    // Adaptive white: luminance above threshold + low saturation
+    const isWhite=lum>whiteThr && sat<55;
+    // Yellow: red+green high, blue low (relative)
+    const isYellow=r>150&&g>130&&b<100&&r-b>65&&lum>120;
+    mask[i]=(isWhite||isYellow)?255:0;
+  }
+
+  // ── 4. Morphological dilation (fills dashed line gaps) ──
+  const dilated=dilate(mask,SAMPLE_W,SAMPLE_H,5);
+
+  // ── 5. Debug mask ────────────────────────────────────
+  if(debugOn){
+    const di=dctx.createImageData(SAMPLE_W,SAMPLE_H);
+    for(let i=0;i<SAMPLE_W*SAMPLE_H;i++){
+      const v=dilated[i];
+      di.data[i*4]=v>0?0:30;di.data[i*4+1]=v>0?200:30;di.data[i*4+2]=v>0?0:30;di.data[i*4+3]=220;
+    }
+    dctx.putImageData(di,0,0);
+  }
+
+  // ── 6. Trapezoidal ROI (perspective-aware) ───────────
+  const TY=Math.floor(SAMPLE_H*.40);   // horizon
+  const BY=Math.floor(SAMPLE_H*.95);   // bottom
+  const TL=Math.floor(SAMPLE_W*.38), TR=Math.floor(SAMPLE_W*.62); // top narrow
+  const BL=Math.floor(SAMPLE_W*.03), BR=Math.floor(SAMPLE_W*.97); // bottom wide
+
+  // ── 7. BOTTOM HISTOGRAM → initial positions ──────────
+  // Use bottom 25% of ROI to find starting lane positions
+  const histY0=Math.floor(TY+(BY-TY)*.75);
+  const hist=new Float32Array(SAMPLE_W);
+  for(let y=histY0;y<BY&&y<SAMPLE_H;y++){
+    const rowOff=y*SAMPLE_W;
+    for(let x=0;x<SAMPLE_W;x++) hist[x]+=dilated[rowOff+x];
+  }
+
+  const midX=Math.floor(SAMPLE_W/2);
+  // Find peak left of center and right of center
+  let initLx=findPeak(hist,BL,midX-10);
+  let initRx=findPeak(hist,midX+10,BR);
+
+  // Fallback: use default positions if no peak found
+  if(initLx<0) initLx=Math.floor(SAMPLE_W*0.22);
+  if(initRx<0) initRx=Math.floor(SAMPLE_W*0.78);
+
+  // ── 8. SLIDING WINDOW from bottom to top ────────────
+  const N_WIN=12;
+  const WIN_HF=18; // half-height of each window (sample px)
+  const WIN_WH=38; // half-width of search window
+  const rawL=[], rawR=[];
+  let curLx=initLx, curRx=initRx;
+  const MIN_PX_THR=18; // min accumulated brightness to accept
+
+  const totalRoiH=BY-TY;
+  const stepH=Math.floor(totalRoiH/N_WIN);
+
+  for(let w=0;w<N_WIN;w++){
+    // Window centre y (go from bottom to top)
+    const yCen=Math.round(BY-w*stepH-stepH/2);
+    if(yCen<TY)break;
+
+    const yTop=Math.max(TY,yCen-WIN_HF);
+    const yBot=Math.min(BY,yCen+WIN_HF);
+
+    // Trapezoid x-bounds at yCen
+    const alpha=(yCen-TY)/(BY-TY);
+    const roiL=Math.round(TL+(BL-TL)*alpha);
+    const roiR=Math.round(TR+(BR-TR)*alpha);
+
+    // Left window bounds (clamped to ROI)
+    const lx1=Math.max(roiL, curLx-WIN_WH);
+    const lx2=Math.min(midX-8, curLx+WIN_WH);
+    // Right window bounds
+    const rx1=Math.max(midX+8, curRx-WIN_WH);
+    const rx2=Math.min(roiR, curRx+WIN_WH);
+
+    // Accumulate per column inside each window
+    const lAcc=new Float32Array(SAMPLE_W);
+    const rAcc=new Float32Array(SAMPLE_W);
+    for(let y=yTop;y<=yBot&&y<SAMPLE_H;y++){
+      const rowOff=y*SAMPLE_W;
+      for(let x=lx1;x<=lx2&&x<SAMPLE_W;x++) lAcc[x]+=dilated[rowOff+x];
+      for(let x=rx1;x<=rx2&&x<SAMPLE_W;x++) rAcc[x]+=dilated[rowOff+x];
+    }
+
+    const lPeak=findPeakArr(lAcc,lx1,lx2);
+    const rPeak=findPeakArr(rAcc,rx1,rx2);
+
+    if(lPeak.val>MIN_PX_THR){curLx=lPeak.x; rawL.push({x:lPeak.x,y:yCen});}
+    if(rPeak.val>MIN_PX_THR){curRx=rPeak.x; rawR.push({x:rPeak.x,y:yCen});}
+  }
+
+  // ── 9. Validate slopes (reject implausible lines) ───
+  // Left line: going up (y decreasing), x should decrease (converge to centre) → m should be negative
+  // Right line: going up, x should increase → m should be positive
+  const rawLv=validateSlope(rawL,'left');
+  const rawRv=validateSlope(rawR,'right');
+
+  // ── 10. Linear regression: x = m·y + b ─────────────
+  const fitL=fitLine(rawLv);
+  const fitR=fitLine(rawRv);
+
+  // ── 11. Exponential weighted temporal smoothing ──────
+  // Weight recent frames more (handles dashed lines well)
+  if(fitL) lhist.L.push(fitL); if(lhist.L.length>HIST) lhist.L.shift();
+  if(fitR) lhist.R.push(fitR); if(lhist.R.length>HIST) lhist.R.shift();
+  // If no detection for a while, slowly decay history
+  if(!fitL&&lhist.L.length>3) lhist.L.shift();
+  if(!fitR&&lhist.R.length>3) lhist.R.shift();
+
+  const avgL=ewmaLine(lhist.L);
+  const avgR=ewmaLine(lhist.R);
+
+  // ── 12. Map sample coords → canvas coords ───────────
+  const sX=W/SAMPLE_W, sY=H/SAMPLE_H;
+  const yHoriz=TY*sY, yBot2=BY*sY;
+
+  const lBot=avgL?{x:evalLine(avgL,BY)*sX,y:yBot2}:null;
+  const lTop=avgL?{x:evalLine(avgL,TY)*sX,y:yHoriz}:null;
+  const rBot=avgR?{x:evalLine(avgR,BY)*sX,y:yBot2}:null;
+  const rTop=avgR?{x:evalLine(avgR,TY)*sX,y:yHoriz}:null;
+
+  // ── 13. Compute deviation ────────────────────────────
+  const deviation=computeDev(lBot,rBot,W);
+
+  // ── 14. Render & alert ───────────────────────────────
+  renderLane(lBot,lTop,rBot,rTop,W,yHoriz,yBot2,deviation);
+  updateDevBar(deviation);
+  triggerLaneAlert(deviation);
+}
+
+// ─────────── MATH HELPERS ────────────────────────────
+function findPeak(arr,x1,x2){
+  let bx=-1,bv=0;
+  for(let x=x1;x<=x2;x++) if(arr[x]>bv){bv=arr[x];bx=x;}
+  return bx;
+}
+function findPeakArr(arr,x1,x2){
+  let bx=Math.round((x1+x2)/2),bv=0;
+  for(let x=x1;x<=x2&&x<arr.length;x++) if(arr[x]>bv){bv=arr[x];bx=x;}
+  return{x:bx,val:bv};
+}
+function fitLine(pts){
+  if(!pts||pts.length<2)return null;
+  let sy=0,sx=0,sy2=0,sxy=0,n=pts.length;
+  for(const p of pts){sy+=p.y;sx+=p.x;sy2+=p.y*p.y;sxy+=p.x*p.y;}
+  const D=n*sy2-sy*sy;
+  if(Math.abs(D)<1e-6)return null;
+  const m=(n*sxy-sx*sy)/D,b=(sx-m*sy)/n;
+  return{m,b};
+}
+function evalLine(l,y){return l.m*y+l.b;}
+function ewmaLine(lines){
+  // Exponential weighted moving average: more recent = higher weight
+  if(!lines.length)return null;
+  let wm=0,wb=0,wSum=0;
+  lines.forEach((l,i)=>{const w=Math.pow(1.4,i);wm+=l.m*w;wb+=l.b*w;wSum+=w;});
+  return{m:wm/wSum,b:wb/wSum};
+}
+function validateSlope(pts,side){
+  if(!pts||pts.length<2)return pts;
+  const line=fitLine(pts);
+  if(!line)return pts;
+  // m is dx/dy: for left line going up, x should decrease → m < 0
+  // for right line going up, x should increase → m > 0... wait, our y is image y.
+  // In image coords, y increases downward. The line x=m*y+b:
+  // left line: at top (small y) x is smaller → m > 0 (as y increases, x increases — so going down, x goes right)
+  // Actually: left line of a road converges toward center as y decreases (going up)
+  // at bottom (large y): x is small (left side); at top (small y): x is larger (converges to center)
+  // So m should be negative for left line (x decreases as y decreases... wait):
+  // x = m*y + b: if y decreases (going up), x = m*y + b decreases if m>0 and increases if m<0
+  // Left line at bottom: x ~= SAMPLE_W*0.15; at top: x ~= SAMPLE_W*0.4 (converges)
+  // So as y decreases from BY to TY, x increases from 0.15 to 0.4 → dx/dy = m < 0 (negative slope)
+  // Right line: at bottom x~0.85, at top x~0.6 → as y decreases, x decreases → dx/dy = m > 0
+  // So: left should have m<0, right should have m>0
+
+  // Plausible range for m: between -0.8 and 0.8 (very steep or flat lines rejected)
+  const mOk=Math.abs(line.m)<0.8;
+  const sideOk=side==='left'?(line.m<0.2):(line.m>-0.2); // allow some tolerance
+  if(!mOk||!sideOk) return [];
+  // Filter outliers: reject points far from the fitted line
+  return pts.filter(p=>Math.abs(evalLine(line,p.y)-p.x)<25);
+}
+// Morphological dilation
+function dilate(mask,W,H,r){
+  const out=new Uint8Array(W*H);
+  for(let y=0;y<H;y++) for(let x=0;x<W;x++){
+    outer:for(let dy=-r;dy<=r;dy++) for(let dx=-r;dx<=r;dx++){
+      const nx=x+dx,ny=y+dy;
+      if(nx>=0&&nx<W&&ny>=0&&ny<H&&mask[ny*W+nx]){out[y*W+x]=255;break outer;}
+    }
+  }
+  return out;
+}
+
+// ─────────── LANE RENDER ─────────────────────────────
+function renderLane(lB,lT,rB,rT,W,yHoriz,yBot,deviation){
+  const abs=Math.abs(deviation);
+  const danger=abs>0.60;
+  const warn=abs>0.35;
+  const lineCol=danger?'#ff4040':warn?'#ffaa00':'#00c8ff';
+  const fillCol=danger?'rgba(255,45,45,0.08)':warn?'rgba(255,170,0,0.05)':'rgba(0,200,255,0.06)';
+
+  // Filled lane polygon
+  if(lB&&lT&&rB&&rT){
+    octx.beginPath();
+    octx.moveTo(lB.x,lB.y);octx.lineTo(lT.x,lT.y);
+    octx.lineTo(rT.x,rT.y);octx.lineTo(rB.x,rB.y);
+    octx.closePath();octx.fillStyle=fillCol;octx.fill();
+  }
+
+  // Lane lines
+  if(lB&&lT) drawLine(lB,lT,danger&&deviation<0?'#ff2d2d':lineCol);
+  if(rB&&rT) drawLine(rB,rT,danger&&deviation>0?'#ff2d2d':lineCol);
+
+  // Horizon guide
+  octx.beginPath();octx.strokeStyle='rgba(0,200,255,.1)';octx.setLineDash([8,6]);octx.lineWidth=1;
+  octx.moveTo(0,yHoriz);octx.lineTo(W,yHoriz);octx.stroke();octx.setLineDash([]);
+
+  // Vehicle centre arrow
+  const cx=W/2;
+  const arrowColor=danger?'rgba(255,45,45,.7)':warn?'rgba(255,170,0,.7)':'rgba(0,255,136,.5)';
+  octx.strokeStyle=arrowColor;octx.lineWidth=2;
+  octx.beginPath();
+  octx.moveTo(cx,yBot+5-38);octx.lineTo(cx,yBot+5);
+  octx.lineTo(cx-9,yBot+5-14);octx.moveTo(cx,yBot+5);octx.lineTo(cx+9,yBot+5-14);
+  octx.stroke();
+}
+function drawLine(p1,p2,color){
+  octx.beginPath();octx.strokeStyle=color+'33';octx.lineWidth=12;octx.lineCap='round';
+  octx.moveTo(p1.x,p1.y);octx.lineTo(p2.x,p2.y);octx.stroke();
+  octx.beginPath();octx.strokeStyle=color;octx.lineWidth=3;octx.lineCap='round';
+  octx.moveTo(p1.x,p1.y);octx.lineTo(p2.x,p2.y);octx.stroke();
+}
+function computeDev(lBot,rBot,W){
+  if(lBot&&rBot){
+    const laneW=rBot.x-lBot.x;
+    if(laneW<30)return 0; // too narrow → unreliable
+    const centre=(lBot.x+rBot.x)/2;
+    return(W/2-centre)/(laneW/2);
+  }
+  if(lBot&&!rBot) return lBot.x>W*.48?-0.7:0;
+  if(rBot&&!lBot) return rBot.x<W*.52? 0.7:0;
+  return 0;
+}
+function updateDevBar(deviation){
+  const fill=document.getElementById('devFill');
+  const abs=Math.abs(deviation);
+  const color=abs>0.60?'#ff2d2d':abs>0.35?'#ffaa00':'#00ff88';
+  const barW=220,half=barW/2;
+  const pos=Math.round(half+(deviation/1.1)*(half-7));
+  fill.style.left=Math.max(2,Math.min(barW-12,pos))+'px';
+  fill.style.background=color;
+  document.getElementById('mCount').textContent=Math.round(Math.abs(deviation)*100)+'%';
+}
+function triggerLaneAlert(deviation){
+  const abs=Math.abs(deviation);
+  if(abs>0.60){
+    const side=deviation>0?'DESTRA':'SINISTRA';
+    setAlert('⚠ USCITA CORSIA '+side,'danger');
+    beep('lane');
+  } else if(abs>0.35){
+    setAlert('◉ AVVICINARSI ALLA CORSIA','warning');
+  } else {
+    setAlert(null,null);
+  }
+}
+
+// ════════════════════════════════════════════════════════
+//  ██████  SAFETY DISTANCE MODE  ██████████████████████
+// ════════════════════════════════════════════════════════
+
+// Vehicle real heights (meters) for distance estimation
+const VHGT={car:1.5,truck:3.5,bus:3.2,motorcycle:1.1};
+const VCLS=['car','truck','bus','motorcycle'];
+
+// Italian highway code safety distance:
+// d_safe = v * t_reaction + v² / (2 * a_braking)
+// t_reaction ≈ 1s, a_braking ≈ 8 m/s²
+// Simplified: approx speed_kmh / 2 meters, but more accurate formula:
+function getSafeDistance(speedKmh){
+  const v=speedKmh/3.6; // m/s
+  const d_react=v*1.0;   // 1 sec reaction
+  const d_brake=(v*v)/(2*8); // 8 m/s² deceleration
+  return Math.max(d_react+d_brake, 4);
+}
+
+// Estimate distance using apparent height of bounding box
+// Assumes vertical FOV ≈ 55° → focal_len_px = H / (2*tan(27.5°)) ≈ H * 0.963
+function estimateDist(bboxH,videoH,cls){
+  const realH=VHGT[cls]||1.5;
+  if(bboxH<8)return Infinity;
+  const fLen=videoH*0.963;
+  return (realH*fLen)/bboxH;
+}
+
+async function safetyLoop(){
+  if(mode!=='safety')return;
+
+  const preds=await cocoModel.detect(video);
+  octx.clearRect(0,0,oc.width,oc.height);
+
+  const W=oc.width,H=oc.height;
+  const roadTop=H*0.18; // ignore sky area
+  const safeD=getSafeDistance(currentSpeedKmh);
+
+  let closestDist=Infinity, vehCount=0;
+
+  for(const p of preds){
+    if(!VCLS.includes(p.class))continue;
+    if(p.score<0.42)continue;
+
+    const[x,y,w,h]=p.bbox;
+    const cy=y+h/2, cx=x+w/2;
+
+    // Must be on road (not sky) and roughly ahead (center 70% of frame)
+    if(cy<roadTop)continue;
+    if(cx<W*0.10||cx>W*0.90)continue;
+
+    vehCount++;
+    const dist=estimateDist(h,H,p.class);
+    const isTooClose=dist<safeD && currentSpeedKmh>8;
+    const isWarning =dist<safeD*1.5 && currentSpeedKmh>8;
+
+    const col=isTooClose?'#ff2d2d':isWarning?'#ffaa00':'#00ff88';
+
+    // Bounding box
+    octx.strokeStyle=col;octx.lineWidth=2;octx.strokeRect(x,y,w,h);
+    octx.fillStyle=isTooClose?'rgba(255,45,45,.1)':isWarning?'rgba(255,170,0,.07)':'rgba(0,255,136,.05)';
+    octx.fillRect(x,y,w,h);
+
+    // Label
+    const distStr=dist<999?dist.toFixed(1)+'m':'>100m';
+    const lbl=`${p.class.toUpperCase()} ${distStr}`;
+    octx.font='bold 13px Rajdhani';octx.fillStyle=col;
+    const tw=octx.measureText(lbl).width;
+    octx.fillRect(x,y-22,tw+8,20);octx.fillStyle='#000';octx.fillText(lbl,x+4,y-6);
+
+    // Corner marks on vehicle
+    drawVehCorners(octx,x,y,w,h,col);
+
+    if(dist<closestDist) closestDist=dist;
+  }
+
+  // Update safety panel
+  const spEl=document.getElementById('sSpeed');
+  const sdEl=document.getElementById('sSafeDist');
+  const svEl=document.getElementById('sVehDist');
+
+  spEl.textContent=Math.round(currentSpeedKmh);
+  sdEl.textContent=currentSpeedKmh>5?Math.round(safeD)+'':'—';
+
+  if(closestDist<Infinity){
+    const dStr=closestDist<100?closestDist.toFixed(1):'100+';
+    svEl.textContent=dStr;
+    const tooClose=closestDist<safeD&&currentSpeedKmh>8;
+    const warn=closestDist<safeD*1.5&&currentSpeedKmh>8;
+    svEl.className=tooClose?'s-val danger':warn?'s-val warn':'s-val';
+    if(tooClose){setAlert('⚠ DISTANZA INSUFFICIENTE — RALLENTARE','danger');beep('safety');}
+    else if(warn) setAlert('◉ DISTANZA AL LIMITE DI SICUREZZA','warning');
+    else setAlert(null,null);
+  } else {
+    svEl.textContent='—';svEl.className='s-val';
+    setAlert(null,null);
+  }
+
+  document.getElementById('mCount').textContent=vehCount;
+  updateFPS();
+  raf=requestAnimationFrame(safetyLoop);
+}
+
+function drawVehCorners(ctx,x,y,w,h,color){
+  const s=10;
+  ctx.strokeStyle=color;ctx.lineWidth=2;
+  [[x,y],[x+w,y],[x,y+h],[x+w,y+h]].forEach(([cx,cy])=>{
+    const dx=cx===x?1:-1, dy=cy===y?1:-1;
+    ctx.beginPath();
+    ctx.moveTo(cx+dx*s,cy);ctx.lineTo(cx,cy);ctx.lineTo(cx,cy+dy*s);
+    ctx.stroke();
+  });
+}
+</script>
+</body>
+</html>
